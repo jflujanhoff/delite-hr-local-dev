@@ -19,6 +19,7 @@ usage() {
   echo "  ./start.sh                   Start backend + frontend"
   echo "  ./start.sh --logs            Start backend + frontend, then tail all logs"
   echo "  ./start.sh --build           Rebuild Docker images, then start"
+  echo "  ./start.sh --build-logs      Rebuild Docker images, start, then tail all logs"
   echo "  ./start.sh --restart         Stop → rebuild → start fresh"
   echo "  ./start.sh --backend-only    Start backend (Docker) only"
   echo "  ./start.sh --frontend-only   Start frontend (npm run dev) only"
@@ -94,6 +95,14 @@ case "$1" in
     echo "Starting backend services..."
     docker compose up -d
     $BACKEND_ONLY || start_frontend
+    ;;
+  --build-logs)
+    echo "Building backend images..."
+    docker compose build
+    echo "Starting backend services..."
+    docker compose up -d
+    start_frontend
+    TAIL_LOGS=true
     ;;
   --restart)
     echo "Stopping services..."
