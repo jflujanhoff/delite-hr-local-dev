@@ -8,22 +8,42 @@ FRONTEND_DIR="../delite-hr-frontend"
 FRONTEND_PID_FILE=".frontend.pid"
 
 usage() {
-  echo "Usage: ./start.sh [--build | --restart | --stop | --reset] [--logs] [--backend-only | --frontend-only]"
+  echo "---------------------------------------------------------------------"
+  echo " FIRST TIME SETUP"
+  echo "---------------------------------------------------------------------"
+  echo "  cd ../delite-hr-frontend && npm install && cd ../delite-hr-local-dev"
   echo ""
-  echo "  (no flag)            Start backend (Docker) + frontend (npm run dev)"
-  echo "  --build              Rebuild backend images then start both"
-  echo "  --restart            Stop → rebuild → start both fresh"
-  echo "  --stop               Stop all services (Docker + frontend)"
-  echo "  --reset              ⚠️  WIPE EVERYTHING: DB + storage + Docker volumes"
-  echo "  --logs               Start then tail backend logs live"
-  echo "  --backend-only       Start backend Docker services only"
-  echo "  --frontend-only      Start frontend (npm run dev) only"
+  echo "---------------------------------------------------------------------"
+  echo " START"
+  echo "---------------------------------------------------------------------"
+  echo "  ./start.sh                   Start backend + frontend"
+  echo "  ./start.sh --logs            Start backend + frontend, then tail all logs"
+  echo "  ./start.sh --build           Rebuild Docker images, then start"
+  echo "  ./start.sh --restart         Stop → rebuild → start fresh"
+  echo "  ./start.sh --backend-only    Start backend (Docker) only"
+  echo "  ./start.sh --frontend-only   Start frontend (npm run dev) only"
   echo ""
-  echo "Other useful commands:"
-  echo "  docker compose logs -f           Tail all logs"
-  echo "  docker compose logs -f backend   Tail API only"
-  echo "  docker compose down              Stop backend services"
-  echo "  cat /tmp/delite-frontend.log     View frontend logs"
+  echo "---------------------------------------------------------------------"
+  echo " STOP"
+  echo "---------------------------------------------------------------------"
+  echo "  ./start.sh --stop            Stop all services (Docker + frontend)"
+  echo "  ./start.sh --reset           ⚠️  Wipe DB, storage, and Docker volumes"
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo " LOGS"
+  echo "---------------------------------------------------------------------"
+  echo "  docker compose logs -f               Tail all backend logs"
+  echo "  docker compose logs -f backend       Tail API logs only"
+  echo "  docker compose logs -f celery_worker Tail Celery worker logs"
+  echo "  cat /tmp/delite-frontend.log         View frontend logs"
+  echo ""
+  echo "---------------------------------------------------------------------"
+  echo " URLS"
+  echo "---------------------------------------------------------------------"
+  echo "  Frontend  → http://localhost:3000"
+  echo "  API       → http://localhost:8000"
+  echo "  Flower    → http://localhost:5555"
+  echo "---------------------------------------------------------------------"
 }
 
 TAIL_LOGS=false
@@ -114,6 +134,15 @@ case "$1" in
     start_frontend
     print_urls
     exit 0
+    ;;
+  --backend-only)
+    echo "Starting backend services..."
+    docker compose up -d
+    ;;
+  --logs)
+    echo "Starting backend services..."
+    docker compose up -d
+    start_frontend
     ;;
   --help|-h)
     usage
