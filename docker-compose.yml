@@ -37,6 +37,11 @@ services:
       - "8000:8000"
     env_file: ../delite-hr-backend/.env
     environment:
+      # Deliberate override of .env's STORAGE_ROOT (a host path, used when
+      # running the backend outside Docker): inside this container the same
+      # data is mounted at /storage by the volume line below, not the host
+      # path. Keep this in sync with the identical override in
+      # ../delite-hr-backend/docker-compose.yml's backend/celery_worker services.
       - STORAGE_ROOT=/storage
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/delite_hr
     volumes:
