@@ -41,12 +41,13 @@ usage() {
   echo "---------------------------------------------------------------------"
   echo "  Frontend   → http://localhost:3000"
   echo "  API        → http://localhost:8000"
+  echo "  HR API     → http://localhost:8001"
   echo "  Flower     → http://localhost:5555"
   echo "  LocalStack → http://localhost:4566"
   echo "---------------------------------------------------------------------"
 }
 
-BACKEND_SERVICES="postgres redis localstack backend celery_worker flower"
+BACKEND_SERVICES="postgres redis localstack backend celery_worker flower hr_redis hr_service hr_celery_worker"
 FRONTEND_SERVICE="frontend"
 
 TAIL_LOGS=false
@@ -74,6 +75,7 @@ print_urls() {
   echo "Services running:"
   echo "  Frontend   → http://localhost:3000"
   echo "  API        → http://localhost:8000"
+  echo "  HR API     → http://localhost:8001"
   echo "  Flower     → http://localhost:5555"
   echo "  LocalStack → http://localhost:4566"
   echo ""
