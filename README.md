@@ -5,7 +5,7 @@ Local development orchestration for the Delite HR platform. Expects the followin
 ```
 11.Delite AI/
 ├── delite-agent-service/  (general-purpose agent platform — projects/documents/chat/generic tools)
-├── delite-hr-frontend/
+├── delite-app-frontend/
 ├── delite-hr-service/     (HR/job-application domain — see its README)
 └── delite-local-dev/      ← you are here
 ```
