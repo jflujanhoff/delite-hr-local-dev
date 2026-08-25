@@ -114,7 +114,7 @@ case "$1" in
     echo "Stopping services and wiping volumes..."
     docker compose down -v
     echo "Deleting storage files..."
-    rm -rf "../delite-hr-backend/storage/*"
+    rm -rf "../delite-agent-service/storage/*"
     echo "Rebuilding images..."
     docker compose build
     echo "Starting fresh..."
