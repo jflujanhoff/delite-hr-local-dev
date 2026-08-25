@@ -12,27 +12,27 @@ Local development orchestration for the Delite HR platform. Expects the followin
 ## Setup
 
 1. Make sure both repos are cloned and `delite-hr-backend/.env` exists.
-2. Install frontend dependencies (first time only):
-   ```bash
-   cd ../delite-hr-frontend && npm install
-   ```
-3. Start everything:
+2. Start everything:
    ```bash
    chmod +x start.sh
    ./start.sh
    ```
 
+Everything — Postgres, Redis, LocalStack (S3 emulator), backend, Celery worker, Flower, and the frontend — runs as a Docker container. There's nothing to `npm install` on the host; the frontend's dependencies install inside its own container image.
+
+File storage uses the same `boto3`/S3 code path as production, pointed at LocalStack instead of real AWS (`STORAGE_BACKEND=s3`, `S3_ENDPOINT_URL=http://localstack:4566` in `delite-hr-backend/.env`). Deploying to real AWS later is an env-var change (bucket, region, credentials/IAM role), not a code change.
+
 ## Commands
 
 | Command | Description |
 |---|---|
-| `./start.sh` | Start backend (Docker) + frontend (`npm run dev`) |
-| `./start.sh --build` | Rebuild backend images then start both |
+| `./start.sh` | Start everything (Docker) |
+| `./start.sh --build` | Rebuild images then start |
 | `./start.sh --restart` | Stop → rebuild → start fresh |
 | `./start.sh --stop` | Stop all services |
-| `./start.sh --reset` | Wipe DB, storage, and Docker volumes |
-| `./start.sh --logs` | Start then tail backend logs |
-| `./start.sh --backend-only` | Backend Docker services only |
+| `./start.sh --reset` | Wipe DB, storage, LocalStack state, and Docker volumes |
+| `./start.sh --logs` | Start then tail all logs |
+| `./start.sh --backend-only` | Backend services only (no frontend) |
 | `./start.sh --frontend-only` | Frontend only |
 
 ## URLs
@@ -42,5 +42,6 @@ Local development orchestration for the Delite HR platform. Expects the followin
 | Frontend | http://localhost:3000 |
 | API | http://localhost:8000 |
 | Flower (Celery) | http://localhost:5555 |
+| LocalStack (S3) | http://localhost:4566 |
 | Postgres | localhost:5432 |
 | Redis | localhost:6379 |
