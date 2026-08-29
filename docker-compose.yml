@@ -8,6 +8,9 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      # Creates the separate delite_hr_apps database delite-hr-service owns,
+      # alongside delite_hr — only runs on first init of an empty volume.
+      - ./postgres-init:/docker-entrypoint-initdb.d
     ports:
       - "5432:5432"
     healthcheck:
@@ -29,19 +32,69 @@ services:
       timeout: 3s
       retries: 5
 
+  # AWS emulator for local dev — the backend talks to this over S3_ENDPOINT_URL
+  # via the same boto3 code path real AWS uses; only the endpoint differs.
+  # LocalStack Community was archived 2026-03-23 (moved fully behind a paid
+  # plan) — MiniStack is the free, MIT-licensed replacement: same port, same
+  # boto3-verified S3 API, and S3_PERSIST=1 here is real (LocalStack's own
+  # PERSISTENCE=1 was a documented Community-edition no-op — verified that
+  # the hard way; this one was verified by actually killing and recreating
+  # the container against the same volume before relying on it).
+  ministack:
+    image: ministackorg/ministack:1.5.3
+    environment:
+      - S3_PERSIST=1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ministack_data:/tmp/ministack-data
+    healthcheck:
+      # No curl/wget in this image (stdlib-only Python runtime) — python3 is
+      # the only thing guaranteed present.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # One-shot, idempotent — MiniStack doesn't auto-create a bucket on first
+  # PutObject (confirmed: NoSuchBucket otherwise), so this replaces
+  # LocalStack's old init-hook script (ministack has no equivalent ready.d
+  # mechanism). Exits after running; not a long-lived service.
+  ministack-init:
+    image: amazon/aws-cli:2.17.62
+    depends_on:
+      ministack:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_BUCKET_NAME=delite-hr-local
+    entrypoint: ["sh", "-c"]
+    command: >
+      "aws --endpoint-url http://ministack:4566 s3api head-bucket --bucket $$S3_BUCKET_NAME 2>/dev/null &&
+       echo \"S3 bucket '$$S3_BUCKET_NAME' already exists.\" ||
+       (aws --endpoint-url http://ministack:4566 s3 mb s3://$$S3_BUCKET_NAME &&
+        echo \"Created S3 bucket '$$S3_BUCKET_NAME'.\")"
+
   backend:
     build:
-      context: ../delite-hr-backend
+      context: ../delite-agent-service
       dockerfile: backend/Dockerfile
     ports:
       - "8000:8000"
-    env_file: ../delite-hr-backend/.env
+    env_file: ../delite-agent-service/.env
     environment:
+      # Deliberate override of .env's STORAGE_ROOT (a host path, used when
+      # running the backend outside Docker): inside this container the same
+      # data is mounted at /storage by the volume line below, not the host
+      # path. Keep this in sync with the identical override in
+      # ../delite-agent-service/docker-compose.yml's backend/celery_worker services.
       - STORAGE_ROOT=/storage
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/delite_hr
     volumes:
-      - ../delite-hr-backend/backend:/app/backend
-      - ../delite-hr-backend/storage:/storage
+      - ../delite-agent-service/backend:/app/backend
+      - ../delite-agent-service/storage:/storage
     command: >
       sh -c "alembic -c backend/alembic.ini upgrade head &&
              uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
@@ -50,35 +103,128 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ministack-init:
+        condition: service_completed_successfully
 
   celery_worker:
     build:
-      context: ../delite-hr-backend
+      context: ../delite-agent-service
       dockerfile: backend/Dockerfile
-    env_file: ../delite-hr-backend/.env
+    env_file: ../delite-agent-service/.env
     environment:
       - STORAGE_ROOT=/storage
       - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/delite_hr
     volumes:
-      - ../delite-hr-backend/backend:/app/backend
-      - ../delite-hr-backend/storage:/storage
+      - ../delite-agent-service/backend:/app/backend
+      - ../delite-agent-service/storage:/storage
     command: celery -A backend.worker worker --loglevel=info --concurrency=4
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      ministack-init:
+        condition: service_completed_successfully
 
   flower:
     image: mher/flower:2.0
     ports:
       - "5555:5555"
-    env_file: ../delite-hr-backend/.env
+    env_file: ../delite-agent-service/.env
     command: celery --broker=${CELERY_BROKER_URL} flower --port=5555
     depends_on:
       redis:
         condition: service_healthy
 
+  # Dedicated Redis for delite-hr-service — deliberately not shared with the
+  # agent service's `redis` above. Once the pipeline engine moves here
+  # (see the split plan), nothing in delite-agent-service reads these keys.
+  hr_redis:
+    image: redis:7-alpine
+    ports:
+      - "6381:6379"
+    volumes:
+      - hr_redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  hr_service:
+    build:
+      context: ../delite-hr-service
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8001:8000"
+    env_file: ../delite-hr-service/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/delite_hr_apps
+      - REDIS_URL=redis://hr_redis:6379/0
+      - CELERY_BROKER_URL=redis://hr_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://hr_redis:6379/1
+    volumes:
+      - ../delite-hr-service/backend:/app/backend
+    command: >
+      sh -c "alembic -c backend/alembic.ini upgrade head &&
+             uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hr_redis:
+        condition: service_healthy
+      # Was missing before the MiniStack switch — hr_service uses S3 too
+      # (backend/services/profile_manager.py, job_manager.py) but had no
+      # dependency on the storage emulator being ready at all.
+      ministack-init:
+        condition: service_completed_successfully
+
+  hr_celery_worker:
+    build:
+      context: ../delite-hr-service
+      dockerfile: backend/Dockerfile
+    env_file: ../delite-hr-service/.env
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/delite_hr_apps
+      - REDIS_URL=redis://hr_redis:6379/0
+      - CELERY_BROKER_URL=redis://hr_redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://hr_redis:6379/1
+    volumes:
+      - ../delite-hr-service/backend:/app/backend
+    command: celery -A backend.worker worker --loglevel=info --concurrency=4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hr_redis:
+        condition: service_healthy
+      ministack-init:
+        condition: service_completed_successfully
+
+  # Dev-mode container (hot reload via `next dev`) — replaces the old
+  # host-level `npm run dev` process start.sh used to manage via .frontend.pid.
+  # Uses Dockerfile.dev (installs deps, runs `next dev`) instead of the repo's
+  # main Dockerfile, purely to skip an unneeded production build on every
+  # image rebuild — faster dev-loop iteration, nothing else. The main
+  # Dockerfile's production build (what an eventual AWS deploy uses) works
+  # correctly on its own; it was fixed independently of this dev setup.
+  frontend:
+    build:
+      context: ../delite-app-frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../delite-app-frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next_cache:/app/.next
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
   redis_data:
+  hr_redis_data:
+  ministack_data:
+  frontend_node_modules:
+  frontend_next_cache:
