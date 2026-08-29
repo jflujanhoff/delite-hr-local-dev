@@ -34,20 +34,48 @@ services:
 
   # AWS emulator for local dev — the backend talks to this over S3_ENDPOINT_URL
   # via the same boto3 code path real AWS uses; only the endpoint differs.
-  localstack:
-    image: localstack/localstack:3
+  # LocalStack Community was archived 2026-03-23 (moved fully behind a paid
+  # plan) — MiniStack is the free, MIT-licensed replacement: same port, same
+  # boto3-verified S3 API, and S3_PERSIST=1 here is real (LocalStack's own
+  # PERSISTENCE=1 was a documented Community-edition no-op — verified that
+  # the hard way; this one was verified by actually killing and recreating
+  # the container against the same volume before relying on it).
+  ministack:
+    image: ministackorg/ministack:1.5.3
     environment:
-      - SERVICES=s3
+      - S3_PERSIST=1
     ports:
       - "4566:4566"
     volumes:
-      - ./localstack-init:/etc/localstack/init/ready.d
-      - localstack_data:/var/lib/localstack
+      - ministack_data:/tmp/ministack-data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      # No curl/wget in this image (stdlib-only Python runtime) — python3 is
+      # the only thing guaranteed present.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4566/_ministack/health')"]
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # One-shot, idempotent — MiniStack doesn't auto-create a bucket on first
+  # PutObject (confirmed: NoSuchBucket otherwise), so this replaces
+  # LocalStack's old init-hook script (ministack has no equivalent ready.d
+  # mechanism). Exits after running; not a long-lived service.
+  ministack-init:
+    image: amazon/aws-cli:2.17.62
+    depends_on:
+      ministack:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - S3_BUCKET_NAME=delite-hr-local
+    entrypoint: ["sh", "-c"]
+    command: >
+      "aws --endpoint-url http://ministack:4566 s3api head-bucket --bucket $$S3_BUCKET_NAME 2>/dev/null &&
+       echo \"S3 bucket '$$S3_BUCKET_NAME' already exists.\" ||
+       (aws --endpoint-url http://ministack:4566 s3 mb s3://$$S3_BUCKET_NAME &&
+        echo \"Created S3 bucket '$$S3_BUCKET_NAME'.\")"
 
   backend:
     build:
@@ -75,8 +103,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      localstack:
-        condition: service_healthy
+      ministack-init:
+        condition: service_completed_successfully
 
   celery_worker:
     build:
@@ -95,8 +123,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      localstack:
-        condition: service_healthy
+      ministack-init:
+        condition: service_completed_successfully
 
   flower:
     image: mher/flower:2.0
@@ -146,6 +174,11 @@ services:
         condition: service_healthy
       hr_redis:
         condition: service_healthy
+      # Was missing before the MiniStack switch — hr_service uses S3 too
+      # (backend/services/profile_manager.py, job_manager.py) but had no
+      # dependency on the storage emulator being ready at all.
+      ministack-init:
+        condition: service_completed_successfully
 
   hr_celery_worker:
     build:
@@ -165,6 +198,8 @@ services:
         condition: service_healthy
       hr_redis:
         condition: service_healthy
+      ministack-init:
+        condition: service_completed_successfully
 
   # Dev-mode container (hot reload via `next dev`) — replaces the old
   # host-level `npm run dev` process start.sh used to manage via .frontend.pid.
@@ -190,6 +225,6 @@ volumes:
   postgres_data:
   redis_data:
   hr_redis_data:
-  localstack_data:
+  ministack_data:
   frontend_node_modules:
   frontend_next_cache:

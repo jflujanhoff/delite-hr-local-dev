@@ -21,11 +21,11 @@ Local development orchestration for the Delite HR platform. Expects the followin
    ./start.sh
    ```
 
-Everything — Postgres, Redis, LocalStack (S3 emulator), the agent-service backend + its Celery worker, the hr-service backend + its own dedicated Redis and Celery worker, Flower, and the frontend — runs as a Docker container. There's nothing to `npm install` on the host; the frontend's dependencies install inside its own container image.
+Everything — Postgres, Redis, MiniStack (S3 emulator), the agent-service backend + its Celery worker, the hr-service backend + its own dedicated Redis and Celery worker, Flower, and the frontend — runs as a Docker container. There's nothing to `npm install` on the host; the frontend's dependencies install inside its own container image.
 
 `delite-hr-service` gets its own Postgres database (`delite_hr_apps`) on the same Postgres instance as `delite-agent-service`'s `delite_hr` database — separate databases, not a shared schema. This is created automatically by `postgres-init/create-hr-service-db.sh` on first container init; if you already have an existing `postgres_data` volume from before this database existed, run `./start.sh --reset` (wipes it) or create it by hand: `docker compose exec postgres psql -U postgres -c "CREATE DATABASE delite_hr_apps;"`.
 
-File storage uses the same `boto3`/S3 code path as production, pointed at LocalStack instead of real AWS (`STORAGE_BACKEND=s3`, `S3_ENDPOINT_URL=http://localstack:4566` in `delite-agent-service/.env`). Deploying to real AWS later is an env-var change (bucket, region, credentials/IAM role), not a code change.
+File storage uses the same `boto3`/S3 code path as production, pointed at MiniStack instead of real AWS (`STORAGE_BACKEND=s3`, `S3_ENDPOINT_URL=http://ministack:4566` in `delite-agent-service/.env` and `delite-hr-service/.env`) — a free, MIT-licensed drop-in for LocalStack Community, which was archived 2026-03-23. Deploying to real AWS later is an env-var change (bucket, region, credentials/IAM role) plus a data copy (`aws s3 sync` from the MiniStack bucket to the real one), not a code change. Data genuinely persists across restarts now (`S3_PERSIST=1`, verified by killing and recreating the container against the same volume) — LocalStack's equivalent flag never actually worked on Community Edition.
 
 ## Commands
 
