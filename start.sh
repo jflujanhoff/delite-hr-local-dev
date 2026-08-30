@@ -70,6 +70,63 @@ services_to_start() {
   fi
 }
 
+# Frees a host port before Docker tries to bind it — lets start.sh and a
+# native `npm run dev` / `uvicorn` process be used interchangeably without a
+# manual `lsof`/`kill` step whenever you switch between the two. Only called
+# for ports whose service is about to be (re)started, so it never touches an
+# unrelated process on a port this stack isn't asking for.
+#
+# Never kills a Docker-owned process: on macOS, Docker Desktop routes every
+# container's port mapping through one shared process (com.docker.backend /
+# vpnkit), not a PID per port — sending it a kill signal for "just this port"
+# takes the whole daemon down (confirmed the hard way). If the holder is
+# Docker, it's almost certainly this same compose project's own container
+# from a prior run, which `docker compose up -d` already recreates cleanly on
+# its own — so we just skip and let it proceed.
+free_port() {
+  local port="$1" label="$2" pid comm
+  pid=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
+  [[ -z "$pid" ]] && return 0
+  comm=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  case "$comm" in
+    *[Dd]ocker*|*vpnkit*|*com.docke*)
+      echo "Port $port ($label) is held by Docker itself (PID $pid) — leaving it alone; docker compose up will reuse/recreate its own container."
+      return 0
+      ;;
+  esac
+  echo "Port $port ($label) is held by PID $pid ($comm) outside Docker — stopping it so the container can bind."
+  kill "$pid" 2>/dev/null || true
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
+# Wraps `docker compose up -d` with a preflight port check for whichever
+# services are being started, so `./start.sh` always succeeds even if a
+# host-level dev server from a previous session is still holding the port.
+start_services() {
+  for svc in "$@"; do
+    case "$svc" in
+      frontend)   free_port 3000 "frontend" ;;
+      backend)    free_port 8000 "backend" ;;
+      hr_service) free_port 8001 "hr_service" ;;
+    esac
+  done
+  docker compose up -d "$@"
+
+  # Safety net, not root-cause prevention: some images (flower, ministack —
+  # see the tmpfs mounts on those services above) bake in a VOLUME path with
+  # nothing explicitly mounted there, so Docker silently creates a fresh
+  # anonymous volume every time the container is recreated, and none of them
+  # ever get cleaned up on their own — that's how this project accumulated
+  # 98 stray volumes. This can't remove anything still attached to a
+  # container (running or stopped), so it's safe to run unconditionally; it
+  # just guarantees whatever orphans *do* get created — from these two
+  # images or a future one with the same pattern — never get to pile up.
+  docker volume prune -f >/dev/null
+}
+
 print_urls() {
   echo ""
   echo "Services running:"
@@ -86,7 +143,7 @@ case "$1" in
     echo "Building images..."
     docker compose build
     echo "Starting services..."
-    docker compose up -d $(services_to_start)
+    start_services $(services_to_start)
     [[ "$1" == "--build-logs" ]] && TAIL_LOGS=true
     ;;
   --restart|--restart-logs)
@@ -95,7 +152,7 @@ case "$1" in
     echo "Rebuilding images..."
     docker compose build
     echo "Starting services..."
-    docker compose up -d $(services_to_start)
+    start_services $(services_to_start)
     [[ "$1" == "--restart-logs" ]] && TAIL_LOGS=true
     ;;
   --stop)
@@ -118,21 +175,21 @@ case "$1" in
     echo "Rebuilding images..."
     docker compose build
     echo "Starting fresh..."
-    docker compose up -d $(services_to_start)
+    start_services $(services_to_start)
     ;;
   --frontend-only)
     echo "Starting frontend..."
-    docker compose up -d frontend
+    start_services frontend
     print_urls
     exit 0
     ;;
   --backend-only)
     echo "Starting backend services..."
-    docker compose up -d $BACKEND_SERVICES
+    start_services $BACKEND_SERVICES
     ;;
   --logs)
     echo "Starting services..."
-    docker compose up -d $(services_to_start)
+    start_services $(services_to_start)
     ;;
   --help|-h)
     usage
@@ -140,7 +197,7 @@ case "$1" in
     ;;
   "")
     echo "Starting services..."
-    docker compose up -d $(services_to_start)
+    start_services $(services_to_start)
     ;;
   *)
     echo "Unknown flag: $1"
