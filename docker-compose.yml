@@ -48,6 +48,15 @@ services:
       - "4566:4566"
     volumes:
       - ministack_data:/tmp/ministack-data
+    # The image bakes VOLUME at these two paths (inherited from its
+    # LocalStack lineage); left unmounted, Docker silently provisions a new
+    # anonymous volume for each on every container recreation, and none of
+    # them ever get cleaned up by `compose down`/`up` — that's what produced
+    # 98 stray volumes over time. tmpfs is correct here: nothing needs to
+    # persist across restarts for either path.
+    tmpfs:
+      - /docker-entrypoint-initaws.d
+      - /etc/localstack/init
     healthcheck:
       # No curl/wget in this image (stdlib-only Python runtime) — python3 is
       # the only thing guaranteed present.
@@ -132,6 +141,11 @@ services:
       - "5555:5555"
     env_file: ../delite-agent-service/.env
     command: celery --broker=${CELERY_BROKER_URL} flower --port=5555
+    # Image bakes VOLUME /data — same "silently spawns a new anonymous
+    # volume every recreation, never cleaned up" issue as ministack above.
+    # No persistence needed for Flower's own monitoring state in local dev.
+    tmpfs:
+      - /data
     depends_on:
       redis:
         condition: service_healthy
